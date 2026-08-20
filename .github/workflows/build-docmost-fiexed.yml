@@ -26,7 +26,6 @@ jobs:
           repository: docmost/docmost
           ref: ${{ inputs.version }}
           persist-credentials: false
-          submodules: recursive
 
       - name: Apply zip attachment path fix
         run: |
