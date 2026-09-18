@@ -256,10 +256,10 @@ index 07ffc82..9ac3cfe 100644
    });
 diff --git a/apps/server/src/integrations/export/docx-export.service.ts b/apps/server/src/integrations/export/docx-export.service.ts
 new file mode 100644
-index 0000000..a06096d
+index 0000000..2da3777
 --- /dev/null
 +++ b/apps/server/src/integrations/export/docx-export.service.ts
-@@ -0,0 +1,328 @@
+@@ -0,0 +1,348 @@
 +import { Injectable, Logger } from '@nestjs/common';
 +import { InjectKysely } from 'nestjs-kysely';
 +import { KyselyDB } from '@docmost/db/types/kysely.types';
@@ -326,7 +326,9 @@ index 0000000..a06096d
 +    page: Page,
 +    mermaidDiagrams: MermaidDiagram[] = [],
 +  ): Promise<Buffer> {
-+    const doc = jsonToNode(getProsemirrorContent(page.content));
++    const doc = jsonToNode(
++      this.prependPageTitle(getProsemirrorContent(page.content), page.title),
++    );
 +    const attachmentFiles = await this.prepareAttachmentNodes(doc);
 +    const mermaidImages = this.attachMermaidImages(doc, mermaidDiagrams);
 +
@@ -369,6 +371,24 @@ index 0000000..a06096d
 +    attachmentFiles.forEach((file) => zip.file(file.path, file.buffer));
 +
 +    return zip.generateAsync({ type: 'nodebuffer' });
++  }
++
++  // The page title lives in its own column instead of the document body, so it
++  // has to be prepended as a heading to survive the export.
++  private prependPageTitle(prosemirrorJson: any, title: string) {
++    if (!title) return prosemirrorJson;
++
++    return {
++      ...prosemirrorJson,
++      content: [
++        {
++          type: 'heading',
++          attrs: { level: 1 },
++          content: [{ type: 'text', text: title }],
++        },
++        ...(prosemirrorJson.content ?? []),
++      ],
++    };
 +  }
 +
 +  private extractAttachmentId(src: string): string | null {
