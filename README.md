@@ -32,6 +32,13 @@ Actions -> Build Docmost Fixed (Docker Hub) -> Run workflow：
 - 修复 ZIP 导出中附件路径多一个前导 `/` 的问题
 - Dockerfile 增加中文字体 `fonts-wqy-microhei`，否则 Word 中中文渲染为空白
 
+## 附件是怎么取的（两种导出不一样）
+
+- **ZIP 导出**（Docmost 原生）：附件本体就在压缩包里，路径为 `files/{附件id}/{文件名}`；页面里对附件的引用会被改写成相对路径 `files/...`，解压后离线可用，不依赖服务器。
+- **Word/DOCX 导出**（本补丁新增）：只有图片类节点（image / drawio / excalidraw）会把文件本体嵌进 docx（SVG 先光栅化成 PNG）；其他文件节点（通用附件、pdf、video、audio、embed、youtube）写成超链接 `<APP_URL>/api/files/{附件id}/{文件名}`，点击时是从 Docmost 服务器下载的，不是从压缩包里取。
+  - 所以 Word 里的附件链接要求：服务器可达、浏览器已登录 Docmost、当前账号对该页面有查看权限（`/files/:fileId/:fileName` 接口带登录校验与页面可见性校验）。
+  - 需要附件本体做离线备份时，用 ZIP 导出。
+
 ## 升级 Docmost 版本
 
 修改 workflow 的 `version` 输入后重新构建即可。若构建日志里 `git apply` 报冲突，需要按新版源码重新生成补丁；最容易冲突的文件是 `apps/client/src/components/common/export-modal.tsx`。
