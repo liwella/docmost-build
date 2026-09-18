@@ -28,17 +28,18 @@ Actions -> Build Docmost Fixed (Docker Hub) -> Run workflow：
 `patches/docmost-docx-export.patch` 基于 `v0.96.0` 生成，包含：
 
 - 新增 DOCX 导出实现（`apps/server/src/integrations/export/docx-export.service.ts`）与 `POST /api/docx-export` 接口，前端导出弹窗去掉企业版限制
-- Word 导出改为产出 zip：`<页面标题>.zip` 里是 `<页面标题>.docx` 加同级 `files/{附件id}/{文件名}`
-- docx 正文里的图片直接嵌入（SVG 先用 resvg 光栅化成 PNG），附件/PDF/视频/音频写成超链接，目标是包内相对路径 `files/...`，解压后点击即打开本地文件，全程不访问 Docmost
+- Word 导出改为产出 zip：`<页面标题>.zip` 里是 `<页面标题>.docx` 加同级 `files/{附件id}/{ASCII 文件名}`
+- docx 正文里的图片直接嵌入（SVG 先用 resvg 光栅化成 PNG）；附件/PDF/视频/音频写成超链接，目标是包内相对路径 `files/...`，解压后点击即打开本地文件，全程不访问 Docmost
 - 修复 ZIP 导出中附件路径多一个前导 `/` 的问题
 - Dockerfile 增加中文字体 `fonts-wqy-microhei`，否则 Word 中中文渲染为空白
 
 ## 附件是怎么取的
 
-- **Word/DOCX 导出**（本补丁新增）：导出的是 `<页面标题>.zip`，解压得到 `<页面标题>.docx` 和同级的 `files/` 目录。图片内容嵌在 docx 里；其他文件以超链接出现在正文，链接是相对路径 `files/{附件id}/{文件名}`，点击直接打开解压出来的本地文件，不访问 Docmost。
+- **Word/DOCX 导出**（本补丁新增）：导出的是 `<页面标题>.zip`，解压得到 `<页面标题>.docx` 和同级的 `files/` 目录。图片内容嵌在 docx 里；其他文件以超链接出现在正文，链接是相对路径，点击直接打开解压出来的本地文件，不访问 Docmost。
   - docx 必须和 `files/` 目录放在一起；单独把 docx 发出去，附件链接会失效。
+  - 包里附件用 ASCII 文件名：`31098需求说明书.pdf` -> `31098.pdf`，`meeting 记录.m4a` -> `meeting.m4a`，纯中文名退化为附件 id 前 8 位（`演示视频.mp4` -> `44444444.mp4`）。Word 打不开带中文或 `%XX` 转义的超链接目标，所以正文里的链接文字保留原始文件名，链接指向的是 ASCII 文件。
   - 兜底：某个附件读不到（文件缺失或无权访问）时，该处链接退回在线地址 `<APP_URL>/api/files/{附件id}/{文件名}`。
-- **ZIP 导出**（Docmost 原生，Markdown/HTML）：附件本体在压缩包里（`files/{附件id}/{文件名}`），页面里对附件的引用会被改写成相对路径 `files/...`，同样离线可用。
+- **ZIP 导出**（Docmost 原生，Markdown/HTML）：附件本体在压缩包里（`files/{附件id}/{文件名}`，保留原始文件名），页面里对附件的引用会被改写成相对路径 `files/...`，同样离线可用。
 
 ## 升级 Docmost 版本
 
@@ -47,4 +48,4 @@ Actions -> Build Docmost Fixed (Docker Hub) -> Run workflow：
 ## 服务器侧注意
 
 - 导出内容本身不再依赖 `APP_URL`；只有上面那条兜底链接会用到，仍建议配成真实访问地址
-- 相对超链接在 Word 里的解析建议实测一次：解压后打开 docx，点一个附件链接确认能打开本地文件
+- 改完补丁后，解压导出的 zip、用 Word 打开 docx，点一个附件链接确认能打开本地文件

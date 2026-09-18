@@ -121,10 +121,10 @@ index bbd58b6..b9f14a2 100644
  }
 diff --git a/apps/server/src/integrations/export/docx-export.service.ts b/apps/server/src/integrations/export/docx-export.service.ts
 new file mode 100644
-index 0000000..246b789
+index 0000000..d3fbe99
 --- /dev/null
 +++ b/apps/server/src/integrations/export/docx-export.service.ts
-@@ -0,0 +1,253 @@
+@@ -0,0 +1,274 @@
 +import { Injectable, Logger } from '@nestjs/common';
 +import { InjectKysely } from 'nestjs-kysely';
 +import { KyselyDB } from '@docmost/db/types/kysely.types';
@@ -135,6 +135,7 @@ index 0000000..246b789
 +import { StorageService } from '../storage/storage.service';
 +import { EnvironmentService } from '../environment/environment.service';
 +import { Node } from '@tiptap/pm/model';
++import * as path from 'path';
 +import * as JSZip from 'jszip';
 +import { Resvg } from '@resvg/resvg-js';
 +import { getSafePageTitle } from './utils';
@@ -228,6 +229,22 @@ index 0000000..246b789
 +    return UUID_REGEX.test(src) ? src : null;
 +  }
 +
++  // Word does not resolve hyperlink targets that contain percent-encoded or
++  // non-ASCII characters, so the packed copy gets an ASCII file name. The
++  // original name stays as the visible link text, and the attachment id in
++  // the folder path keeps the packed name unambiguous.
++  private packedFileName(attachmentId: string, fileName: string): string {
++    const extension = path.extname(fileName ?? '');
++    const safeExtension = extension.replace(/[^A-Za-z0-9.]+/g, '');
++    const safeBaseName = path
++      .basename(fileName ?? '', extension)
++      .replace(/[^A-Za-z0-9]+/g, '-')
++      .replace(/^-+|-+$/g, '')
++      .slice(0, 64);
++
++    return `${safeBaseName || attachmentId.slice(0, 8)}${safeExtension}`;
++  }
++
 +  // Word can neither embed SVG nor any non-image file (video, audio, PDF,
 +  // attachments), so attachment-backed nodes are rewritten before export:
 +  //   - image/drawio/excalidraw keep a src the serializer reads as an image
@@ -302,15 +319,19 @@ index 0000000..246b789
 +      if (attachment) {
 +        try {
 +          const buffer = await this.storageService.read(attachment.filePath);
++          const packedName = this.packedFileName(
++            attachment.id,
++            attachment.fileName,
++          );
 +          files.set(attachment.id, {
-+            path: `files/${attachment.id}/${attachment.fileName}`,
++            path: `files/${attachment.id}/${packedName}`,
 +            buffer,
 +          });
-+          // hrefLabel keeps the stored file name as the visible link text.
++          // hrefLabel keeps the original file name as the visible link text.
 +          // The relative target resolves against the .docx, which sits next
 +          // to the files/ folder in the exported zip.
 +          Object.assign(node.attrs, {
-+            href: `files/${attachment.id}/${encodeURIComponent(attachment.fileName)}`,
++            href: `files/${attachment.id}/${packedName}`,
 +            hrefLabel: attachment.fileName,
 +          });
 +          continue;
