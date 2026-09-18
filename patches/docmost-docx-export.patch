@@ -822,12 +822,13 @@ index 7ef894c..cb21a44 100644
      "@tiptap/core": "3.31.3",
      "@tiptap/extension-audio": "3.31.3",
 diff --git a/packages/editor-ext/src/lib/prosemirror-docx/schema.ts b/packages/editor-ext/src/lib/prosemirror-docx/schema.ts
-index 235d796..0e64353 100644
+index 235d796..fa78c7c 100644
 --- a/packages/editor-ext/src/lib/prosemirror-docx/schema.ts
 +++ b/packages/editor-ext/src/lib/prosemirror-docx/schema.ts
-@@ -1,7 +1,21 @@
+@@ -1,7 +1,22 @@
 -import { FootnoteReferenceRun, HeadingLevel, Paragraph, ShadingType } from 'docx';
 +import {
++  AlignmentType,
 +  BorderStyle,
 +  ExternalHyperlink,
 +  FootnoteReferenceRun,
@@ -848,7 +849,7 @@ index 235d796..0e64353 100644
    MarkSerializer,
    NodeSerializerAsync,
    OptionsAsync,
-@@ -10,6 +24,106 @@ import { writeDocx } from './utils';
+@@ -10,6 +25,106 @@ import { writeDocx } from './utils';
  
  export type DocxImageResolver = OptionsAsync['getImageBuffer'];
  
@@ -955,7 +956,7 @@ index 235d796..0e64353 100644
  // docx requires a 6-digit hex color (no leading #). Convert #rgb, #rrggbb,
  // and rgb()/rgba() inputs to 6-digit hex; return undefined for anything else
  // (named colors, hsl, etc.) so the caller omits the color rather than letting
-@@ -50,18 +164,49 @@ const renderImage: NodeSerializerAsync[string] = async (state, node) => {
+@@ -50,18 +165,49 @@ const renderImage: NodeSerializerAsync[string] = async (state, node) => {
    state.closeBlock(node);
  };
  
@@ -1012,7 +1013,7 @@ index 235d796..0e64353 100644
  };
  
  export const defaultAsyncNodes: NodeSerializerAsync = {
-@@ -88,7 +233,46 @@ export const defaultAsyncNodes: NodeSerializerAsync = {
+@@ -88,7 +234,49 @@ export const defaultAsyncNodes: NodeSerializerAsync = {
      await state.renderContent(node, { style: 'IntenseQuote' });
    },
    async codeBlock(state, node) {
@@ -1034,6 +1035,9 @@ index 235d796..0e64353 100644
 +    }
 +
 +    state.addParagraphOptions({
++      // Word defaults to justified for CJK documents, which would stretch
++      // every line of the block since its lines are soft breaks.
++      alignment: AlignmentType.LEFT,
 +      shading: { type: ShadingType.CLEAR, fill: 'F2F2F2' },
 +      border: {
 +        top: CODE_BLOCK_BORDER,
@@ -1060,7 +1064,7 @@ index 235d796..0e64353 100644
      state.closeBlock(node);
    },
    horizontalRule(state, node) {
-@@ -118,7 +302,21 @@ export const defaultAsyncNodes: NodeSerializerAsync = {
+@@ -118,7 +306,21 @@ export const defaultAsyncNodes: NodeSerializerAsync = {
      await state.renderContent(node);
    },
    async table(state, node) {
