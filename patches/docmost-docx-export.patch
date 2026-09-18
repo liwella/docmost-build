@@ -754,16 +754,29 @@ index e05ad28..fd2d08b 100644
  })
  export class ExportModule {}
 diff --git a/apps/server/src/integrations/export/export.service.ts b/apps/server/src/integrations/export/export.service.ts
-index 733e4e9..a027d31 100644
+index 733e4e9..2da0ef8 100644
 --- a/apps/server/src/integrations/export/export.service.ts
 +++ b/apps/server/src/integrations/export/export.service.ts
-@@ -42,6 +42,31 @@ import { htmlToMarkdown } from '@docmost/editor-ext';
+@@ -42,6 +42,44 @@ import { htmlToMarkdown } from '@docmost/editor-ext';
  
  type AllowedAttachment = { id: string; fileName: string; filePath: string };
  
 +// The exported page carries no stylesheet, so a table would render without any
 +// border in a browser. These rules mirror the editor's table styling.
 +const EXPORT_HTML_STYLES = `
++      body {
++        margin: 0 auto;
++        max-width: 50%;
++        padding: 32px 0;
++      }
++      img,
++      video {
++        display: block;
++        margin-left: auto;
++        margin-right: auto;
++        max-width: 100%;
++        height: auto;
++      }
 +      table {
 +        border-collapse: collapse;
 +        table-layout: fixed;
@@ -789,7 +802,7 @@ index 733e4e9..a027d31 100644
  @Injectable()
  export class ExportService {
    private readonly logger = new Logger(ExportService.name);
-@@ -86,7 +111,10 @@ export class ExportService {
+@@ -86,7 +124,10 @@ export class ExportService {
        return `<!DOCTYPE html>
        <html>
          <head>
@@ -800,7 +813,7 @@ index 733e4e9..a027d31 100644
          </head>
          <body>${pageHtml}</body>
        </html>`;
-@@ -371,7 +399,7 @@ export class ExportService {
+@@ -371,7 +412,7 @@ export class ExportService {
            const fileBuffer = await this.storageService.read(
              attachment.filePath,
            );

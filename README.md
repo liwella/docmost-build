@@ -30,7 +30,7 @@ Actions -> Build Docmost Fixed (Docker Hub) -> Run workflow：
 - 新增 DOCX 导出实现（`apps/server/src/integrations/export/docx-export.service.ts`）与 `POST /api/docx-export` 接口，前端导出弹窗去掉企业版限制
 - Word 导出改为产出 zip：`<页面标题>.zip` 里是 `<页面标题>.docx` 加同级 `files/{附件id}/{ASCII 文件名}`
 - 页面标题导出成 docx 正文里的第一个一级标题（标题在 Docmost 里是独立字段、不写在正文内容里，之前整段丢失）
-- HTML 导出补上表格样式（`1px solid #ced4da` 边框、表头 `#f1f3f5` 底色加粗、单元格内边距），导出页面原本不带任何样式表，表格在浏览器里是无边框的；并在 head 里声明 `<meta charset="utf-8" />`，避免本地打开时中文乱码
+- HTML 导出补上基础排版：正文限制在窗口中间约 1/2 宽度（`body { max-width: 50%; margin: 0 auto }`）、图片/视频水平居中且不超出内容区；表格加上 `1px solid #ced4da` 边框、表头 `#f1f3f5` 底色加粗、单元格内边距；并在 head 里声明 `<meta charset="utf-8" />`，避免本地打开时中文乱码。导出页面原本不带任何样式表，所以表格无边框、内容又是铺满整个窗口的
 - docx 正文里的图片直接嵌入（SVG 先用 resvg 光栅化成 PNG）；附件/PDF/视频/音频写成超链接，目标是包内相对路径 `files/...`，解压后点击即打开本地文件，全程不访问 Docmost
 - 代码块导出为等宽字体（Consolas 9pt）+ 灰底 + 细边框，逐行输出并保留缩进（Word 会忽略文本里的原始换行，所以按行拆成多个 run）；并强制左对齐 —— 中文版 Word 的正文默认是两端对齐，而代码块是「一个段落 + 软换行」，不给 `w:jc` 就会把每一行都拉开
 - mermaid 代码块导出成图片：前端用 mermaid 渲染 SVG（`htmlLabels: false`，容器的 resvg 画不了 `<foreignObject>`），服务端 resvg 光栅化成 PNG 嵌进 docx；渲染失败的图仍按代码文本导出
