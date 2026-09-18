@@ -754,10 +754,10 @@ index e05ad28..fd2d08b 100644
  })
  export class ExportModule {}
 diff --git a/apps/server/src/integrations/export/export.service.ts b/apps/server/src/integrations/export/export.service.ts
-index 733e4e9..ef09f2a 100644
+index 733e4e9..a1101b3 100644
 --- a/apps/server/src/integrations/export/export.service.ts
 +++ b/apps/server/src/integrations/export/export.service.ts
-@@ -42,6 +42,47 @@ import { htmlToMarkdown } from '@docmost/editor-ext';
+@@ -42,6 +42,48 @@ import { htmlToMarkdown } from '@docmost/editor-ext';
  
  type AllowedAttachment = { id: string; fileName: string; filePath: string };
  
@@ -789,6 +789,7 @@ index 733e4e9..ef09f2a 100644
 +        border: 1px solid #ced4da;
 +        box-sizing: border-box;
 +        min-width: 1em;
++        overflow-wrap: anywhere;
 +        padding: 3px 5px;
 +        vertical-align: top;
 +      }
@@ -805,7 +806,7 @@ index 733e4e9..ef09f2a 100644
  @Injectable()
  export class ExportService {
    private readonly logger = new Logger(ExportService.name);
-@@ -86,7 +127,10 @@ export class ExportService {
+@@ -86,7 +128,10 @@ export class ExportService {
        return `<!DOCTYPE html>
        <html>
          <head>
@@ -816,7 +817,7 @@ index 733e4e9..ef09f2a 100644
          </head>
          <body>${pageHtml}</body>
        </html>`;
-@@ -371,7 +415,7 @@ export class ExportService {
+@@ -371,7 +416,7 @@ export class ExportService {
            const fileBuffer = await this.storageService.read(
              attachment.filePath,
            );
