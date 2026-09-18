@@ -1,0 +1,716 @@
+diff --git a/Dockerfile b/Dockerfile
+index 33cac22..d34c064 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -15,7 +15,7 @@ RUN pnpm build
+ FROM base AS installer
+ 
+ RUN apt-get update \
+-  && apt-get install -y --no-install-recommends curl bash \
++  && apt-get install -y --no-install-recommends curl bash fonts-dejavu-core fonts-wqy-microhei \
+   && rm -rf /var/lib/apt/lists/*
+ 
+ # drop npm and corepack
+diff --git a/apps/client/src/components/common/export-modal.tsx b/apps/client/src/components/common/export-modal.tsx
+index bbd58b6..269c2d5 100644
+--- a/apps/client/src/components/common/export-modal.tsx
++++ b/apps/client/src/components/common/export-modal.tsx
+@@ -6,8 +6,6 @@ import {
+   Select,
+   Switch,
+   Divider,
+-  Tooltip,
+-  Badge,
+ } from "@mantine/core";
+ import {
+   exportPage,
+@@ -18,9 +16,6 @@ import { ExportFormat } from "@/features/page/types/page.types.ts";
+ import { notifications } from "@mantine/notifications";
+ import { exportSpace } from "@/features/space/services/space-service";
+ import { useTranslation } from "react-i18next";
+-import { Feature } from "@/ee/features";
+-import { useHasFeature } from "@/ee/hooks/use-feature";
+-import { useUpgradeLabel } from "@/ee/hooks/use-upgrade-label";
+ 
+ interface ExportModalProps {
+   id: string;
+@@ -40,11 +35,7 @@ export default function ExportModal({
+   const [includeAttachments, setIncludeAttachments] = useState<boolean>(false);
+   const [isExporting, setIsExporting] = useState<boolean>(false);
+   const { t } = useTranslation();
+-  const upgradeLabel = useUpgradeLabel();
+   const isDocx = format === ExportFormat.Docx;
+-  const docxEntitled = useHasFeature(Feature.DOCX_EXPORT);
+-  const blockedByLicense = isDocx && !docxEntitled;
+-
+   const handleExport = async () => {
+     setIsExporting(true);
+     try {
+@@ -108,7 +99,6 @@ export default function ExportModal({
+               format={format}
+               onChange={handleChange}
+               includeDocx={type === "page"}
+-              docxEntitled={docxEntitled}
+             />
+           </Group>
+ 
+@@ -164,16 +154,12 @@ export default function ExportModal({
+             <Button onClick={onClose} variant="default">
+               {t("Cancel")}
+             </Button>
+-            <Tooltip label={upgradeLabel} disabled={!blockedByLicense} withArrow>
+-              <Button
+-                onClick={handleExport}
+-                loading={isExporting}
+-                disabled={blockedByLicense}
+-                data-disabled={blockedByLicense || undefined}
+-              >
+-                {t("Export")}
+-              </Button>
+-            </Tooltip>
++            <Button
++              onClick={handleExport}
++              loading={isExporting}
++            >
++              {t("Export")}
++            </Button>
+           </Group>
+         </Modal.Body>
+       </Modal.Content>
+@@ -185,13 +171,11 @@ interface ExportFormatSelection {
+   format: ExportFormat;
+   onChange: (value: string) => void;
+   includeDocx?: boolean;
+-  docxEntitled?: boolean;
+ }
+ function ExportFormatSelection({
+   format,
+   onChange,
+   includeDocx,
+-  docxEntitled,
+ }: ExportFormatSelection) {
+   const { t } = useTranslation();
+ 
+@@ -199,7 +183,7 @@ function ExportFormatSelection({
+     { value: "markdown", label: "Markdown" },
+     { value: "html", label: "HTML" },
+     ...(includeDocx
+-      ? [{ value: "docx", label: "Word (.docx)", disabled: !docxEntitled }]
++      ? [{ value: "docx", label: "Word (.docx)" }]
+       : []),
+   ];
+ 
+@@ -213,20 +197,6 @@ function ExportFormatSelection({
+       allowDeselect={false}
+       withCheckIcon={false}
+       aria-label={t("Select export format")}
+-      renderOption={({ option }) =>
+-        option.value === "docx" && !docxEntitled ? (
+-          <div>
+-            <Text size="sm" c="dimmed">
+-              {option.label}
+-            </Text>
+-            <Badge size="xs" mt={4}>
+-              {t("Enterprise")}
+-            </Badge>
+-          </div>
+-        ) : (
+-          <Text size="sm">{option.label}</Text>
+-        )
+-      }
+     />
+   );
+ }
+diff --git a/apps/server/src/integrations/export/docx-export.service.ts b/apps/server/src/integrations/export/docx-export.service.ts
+new file mode 100644
+index 0000000..f18fdc8
+--- /dev/null
++++ b/apps/server/src/integrations/export/docx-export.service.ts
+@@ -0,0 +1,212 @@
++import { Injectable, Logger } from '@nestjs/common';
++import { InjectKysely } from 'nestjs-kysely';
++import { KyselyDB } from '@docmost/db/types/kysely.types';
++import { Page } from '@docmost/db/types/entity.types';
++import { pageNodeToDocxBuffer } from '@docmost/editor-ext';
++import { jsonToNode } from '../../collaboration/collaboration.util';
++import { getProsemirrorContent } from '../../common/helpers/prosemirror/utils';
++import { StorageService } from '../storage/storage.service';
++import { EnvironmentService } from '../environment/environment.service';
++import { Node } from '@tiptap/pm/model';
++import { Resvg } from '@resvg/resvg-js';
++
++// Matches "/api/files/{id}/{name}" and "/files/{id}/{name}", with or without
++// a host prefix.
++const ATTACHMENT_URL_REGEX =
++  /\/files\/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\//;
++
++const UUID_REGEX =
++  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
++
++const IMAGE_NODE_TYPES = ['image', 'drawio', 'excalidraw'];
++
++// Nodes whose file cannot live inside a .docx; rendered as a hyperlink instead.
++const LINK_NODE_TYPES = [
++  'video',
++  'audio',
++  'pdf',
++  'attachment',
++  'embed',
++  'youtube',
++];
++
++// Word cannot embed SVG, so diagram attachments are rasterized to PNG.
++// Rendered wider than the 600px used for layout so print quality holds up.
++const SVG_RASTER_WIDTH = 1400;
++const SVG_FILE_REGEX = /\.svg$/i;
++
++@Injectable()
++export class DocxExportService {
++  private readonly logger = new Logger(DocxExportService.name);
++
++  constructor(
++    @InjectKysely() private readonly db: KyselyDB,
++    private readonly storageService: StorageService,
++    private readonly environmentService: EnvironmentService,
++  ) {}
++
++  async exportPage(page: Page): Promise<Buffer> {
++    const doc = jsonToNode(getProsemirrorContent(page.content));
++    await this.prepareAttachmentNodes(doc);
++
++    const getImageBuffer = async (src: string): Promise<Uint8Array> => {
++      const attachmentId = this.extractAttachmentId(src);
++      if (!attachmentId) {
++        this.logger.warn(`DOCX export: unsupported image source ${src}`);
++        throw new Error(`Unsupported image source: ${src}`);
++      }
++
++      const attachment = await this.db
++        .selectFrom('attachments')
++        .select(['filePath', 'fileName'])
++        .where('id', '=', attachmentId)
++        .executeTakeFirst();
++
++      if (!attachment) {
++        this.logger.warn(`DOCX export: attachment not found ${attachmentId}`);
++        throw new Error(`Attachment not found: ${attachmentId}`);
++      }
++
++      const buffer = await this.storageService.read(attachment.filePath);
++
++      if (this.isSvgAttachment(attachment.fileName, buffer)) {
++        return this.rasterizeSvg(buffer, attachmentId);
++      }
++
++      return new Uint8Array(buffer);
++    };
++
++    return pageNodeToDocxBuffer(doc, getImageBuffer);
++  }
++
++  private extractAttachmentId(src: string): string | null {
++    if (!src) return null;
++    const match = ATTACHMENT_URL_REGEX.exec(src);
++    if (match) return match[1];
++    return UUID_REGEX.test(src) ? src : null;
++  }
++
++  // Word can neither embed SVG nor any non-image file (video, audio, PDF,
++  // attachments), so attachment-backed nodes are rewritten before export:
++  //   - image/drawio/excalidraw keep a src the serializer reads as an image
++  //     (rasterized SVG diagrams are advertised as .png)
++  //   - every other file node gets an absolute href rendered as a hyperlink
++  private async prepareAttachmentNodes(doc: Node) {
++    const images: { node: Node; attachmentId: string }[] = [];
++    const links: {
++      node: Node;
++      attachmentId: string | null;
++      href: string | null;
++    }[] = [];
++
++    doc.descendants((node: Node) => {
++      const nodeType = node.type.name;
++
++      if (IMAGE_NODE_TYPES.includes(nodeType)) {
++        const attachmentId = this.resolveAttachmentId(node);
++        if (attachmentId) images.push({ node, attachmentId });
++        return;
++      }
++
++      if (LINK_NODE_TYPES.includes(nodeType)) {
++        links.push({
++          node,
++          attachmentId: this.resolveAttachmentId(node),
++          href: this.absoluteUrl(node.attrs?.src || node.attrs?.url || ''),
++        });
++      }
++    });
++
++    if (images.length === 0 && links.length === 0) return;
++
++    const ids = new Set<string>();
++    images.forEach((item) => ids.add(item.attachmentId));
++    links.forEach((item) => {
++      if (item.attachmentId) ids.add(item.attachmentId);
++    });
++
++    const attachmentIds = [...ids];
++    const attachments = attachmentIds.length
++      ? await this.db
++          .selectFrom('attachments')
++          .select(['id', 'fileName'])
++          .where('id', 'in', attachmentIds)
++          .execute()
++      : [];
++    const fileNameById = new Map(
++      attachments.map((attachment) => [attachment.id, attachment.fileName]),
++    );
++
++    for (const { node, attachmentId } of images) {
++      const fileName = fileNameById.get(attachmentId);
++      if (!fileName) continue;
++      // The serializer picks the image type from the src file extension.
++      const exportName = SVG_FILE_REGEX.test(fileName)
++        ? fileName.replace(SVG_FILE_REGEX, '.png')
++        : fileName;
++      Object.assign(node.attrs, {
++        src: `/api/files/${attachmentId}/${exportName}`,
++      });
++    }
++
++    for (const { node, attachmentId, href } of links) {
++      const fileName = attachmentId
++        ? fileNameById.get(attachmentId)
++        : undefined;
++      const url = fileName
++        ? `${this.environmentService.getAppUrl()}/api/files/${attachmentId}/${encodeURIComponent(fileName)}`
++        : href;
++      if (url) {
++        // hrefLabel keeps the stored file name as the visible link text.
++        Object.assign(node.attrs, { href: url, hrefLabel: fileName });
++      }
++    }
++  }
++
++  private resolveAttachmentId(node: Node): string | null {
++    for (const value of [
++      node.attrs?.attachmentId,
++      node.attrs?.src,
++      node.attrs?.url,
++    ]) {
++      if (typeof value !== 'string') continue;
++      const attachmentId = this.extractAttachmentId(value);
++      if (attachmentId) return attachmentId;
++    }
++    return null;
++  }
++
++  // Relative Docmost file URLs are turned into absolute ones so Word can open
++  // them from the exported document.
++  private absoluteUrl(value: string): string | null {
++    if (typeof value !== 'string' || value.length === 0) return null;
++    if (/^https?:\/\//i.test(value)) return value;
++    if (value.startsWith('/')) {
++      return `${this.environmentService.getAppUrl()}${value}`;
++    }
++    return null;
++  }
++
++  // drawio/excalidraw attachments are SVG; the file name is the cheap check,
++  // with a content sniff as a fallback.
++  private isSvgAttachment(fileName: string, buffer: Buffer): boolean {
++    if (SVG_FILE_REGEX.test(fileName ?? '')) return true;
++    return buffer.subarray(0, 1024).includes('<svg');
++  }
++
++  // Word cannot embed SVG, so diagram attachments are rasterized to PNG.
++  private rasterizeSvg(buffer: Buffer, attachmentId: string): Uint8Array {
++    try {
++      const resvg = new Resvg(buffer.toString('utf8'), {
++        fitTo: { mode: 'width', value: SVG_RASTER_WIDTH },
++      });
++      return new Uint8Array(resvg.render().asPng());
++    } catch (err) {
++      this.logger.warn(
++        `DOCX export: failed to rasterize SVG ${attachmentId}`,
++        err,
++      );
++      throw err;
++    }
++  }
++}
+diff --git a/apps/server/src/integrations/export/dto/export-dto.ts b/apps/server/src/integrations/export/dto/export-dto.ts
+index a2216b2..2e2f405 100644
+--- a/apps/server/src/integrations/export/dto/export-dto.ts
++++ b/apps/server/src/integrations/export/dto/export-dto.ts
+@@ -41,4 +41,10 @@ export class ExportSpaceDto {
+   @IsOptional()
+   @IsBoolean()
+   includeAttachments?: boolean;
++}
++
++export class ExportPageDocxDto {
++  @IsString()
++  @IsNotEmpty()
++  pageId: string;
+ }
+\ No newline at end of file
+diff --git a/apps/server/src/integrations/export/export.controller.ts b/apps/server/src/integrations/export/export.controller.ts
+index 140622d..b18a43a 100644
+--- a/apps/server/src/integrations/export/export.controller.ts
++++ b/apps/server/src/integrations/export/export.controller.ts
+@@ -11,7 +11,12 @@ import {
+   UseGuards,
+ } from '@nestjs/common';
+ import { ExportService } from './export.service';
+-import { ExportPageDto, ExportSpaceDto } from './dto/export-dto';
++import { DocxExportService } from './docx-export.service';
++import {
++  ExportPageDocxDto,
++  ExportPageDto,
++  ExportSpaceDto,
++} from './dto/export-dto';
+ import { AuthUser } from '../../common/decorators/auth-user.decorator';
+ import { User } from '@docmost/db/types/entity.types';
+ import SpaceAbilityFactory from '../../core/casl/abilities/space-ability.factory';
+@@ -40,6 +45,7 @@ import {
+ export class ExportController {
+   constructor(
+     private readonly exportService: ExportService,
++    private readonly docxExportService: DocxExportService,
+     private readonly pageRepo: PageRepo,
+     private readonly spaceAbility: SpaceAbilityFactory,
+     private readonly pageAccessService: PageAccessService,
+@@ -115,6 +121,51 @@ export class ExportController {
+     }
+   }
+ 
++  @UseGuards(JwtAuthGuard)
++  @HttpCode(HttpStatus.OK)
++  @Post('docx-export')
++  async exportPageDocx(
++    @Body() dto: ExportPageDocxDto,
++    @AuthUser() user: User,
++    @Res() res: FastifyReply,
++  ) {
++    const page = await this.pageRepo.findById(dto.pageId, {
++      includeContent: true,
++    });
++
++    if (!page || page.deletedAt) {
++      throw new NotFoundException('Page not found');
++    }
++
++    await this.pageAccessService.validateCanView(page, user);
++
++    const fileBuffer = await this.docxExportService.exportPage(page);
++    const fileName =
++      sanitizeFileName(getPageTitle(page.title), { preserveSpaces: true }) +
++      '.docx';
++
++    this.auditService.log({
++      event: AuditEvent.PAGE_EXPORTED,
++      resourceType: AuditResource.PAGE,
++      resourceId: page.id,
++      spaceId: page.spaceId,
++      metadata: {
++        title: getPageTitle(page.title),
++        format: 'docx',
++        spaceId: page.spaceId,
++      },
++    });
++
++    res.headers({
++      'Content-Type':
++        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
++      'Content-Disposition':
++        'attachment; filename="' + encodeURIComponent(fileName) + '"',
++    });
++
++    res.send(fileBuffer);
++  }
++
+   @UseGuards(JwtAuthGuard)
+   @HttpCode(HttpStatus.OK)
+   @Post('spaces/export')
+diff --git a/apps/server/src/integrations/export/export.module.ts b/apps/server/src/integrations/export/export.module.ts
+index e05ad28..fd2d08b 100644
+--- a/apps/server/src/integrations/export/export.module.ts
++++ b/apps/server/src/integrations/export/export.module.ts
+@@ -1,11 +1,12 @@
+ import { Module } from '@nestjs/common';
+ import { ExportService } from './export.service';
+ import { ExportController } from './export.controller';
++import { DocxExportService } from './docx-export.service';
+ import { StorageModule } from '../storage/storage.module';
+ 
+ @Module({
+   imports: [StorageModule],
+-  providers: [ExportService],
++  providers: [ExportService, DocxExportService],
+   controllers: [ExportController],
+ })
+ export class ExportModule {}
+diff --git a/apps/server/src/integrations/export/export.service.ts b/apps/server/src/integrations/export/export.service.ts
+index 733e4e9..3f013b0 100644
+--- a/apps/server/src/integrations/export/export.service.ts
++++ b/apps/server/src/integrations/export/export.service.ts
+@@ -371,7 +371,7 @@ export class ExportService {
+           const fileBuffer = await this.storageService.read(
+             attachment.filePath,
+           );
+-          const filePath = `/files/${attachment.id}/${attachment.fileName}`;
++          const filePath = `files/${attachment.id}/${attachment.fileName}`;
+           zip.file(filePath, fileBuffer);
+         } catch (err) {
+           this.logger.debug(`Attachment export error ${attachment.id}`, err);
+diff --git a/package.json b/package.json
+index 7ef894c..cb21a44 100644
+--- a/package.json
++++ b/package.json
+@@ -30,6 +30,7 @@
+     "@hocuspocus/transformer": "4.5.0",
+     "@joplin/turndown": "4.0.82",
+     "@joplin/turndown-plugin-gfm": "1.0.64",
++    "@resvg/resvg-js": "2.6.2",
+     "@sindresorhus/slugify": "3.0.0",
+     "@tiptap/core": "3.31.3",
+     "@tiptap/extension-audio": "3.31.3",
+diff --git a/packages/editor-ext/src/lib/prosemirror-docx/schema.ts b/packages/editor-ext/src/lib/prosemirror-docx/schema.ts
+index 235d796..ef97282 100644
+--- a/packages/editor-ext/src/lib/prosemirror-docx/schema.ts
++++ b/packages/editor-ext/src/lib/prosemirror-docx/schema.ts
+@@ -1,7 +1,16 @@
+-import { FootnoteReferenceRun, HeadingLevel, Paragraph, ShadingType } from 'docx';
++import {
++  ExternalHyperlink,
++  FootnoteReferenceRun,
++  HeadingLevel,
++  Paragraph,
++  ShadingType,
++  TextRun,
++  UnderlineType,
++} from 'docx';
+ import { Node } from 'prosemirror-model';
+ import {
+   DocxSerializerAsync,
++  DocxSerializerStateAsync,
+   MarkSerializer,
+   NodeSerializerAsync,
+   OptionsAsync,
+@@ -50,18 +59,49 @@ const renderImage: NodeSerializerAsync[string] = async (state, node) => {
+   state.closeBlock(node);
+ };
+ 
+-// Non-embeddable media render as a labelled line.
++// Word cannot embed anything other than images, so these nodes render as a
++// hyperlink to the original file. The exporter supplies attrs.href as an
++// absolute URL; without it the node degrades to a plain label.
++const appendFileLine = (
++  state: DocxSerializerStateAsync,
++  node: Node,
++  label: string,
++) => {
++  const href: string = node.attrs?.href;
++  if (href) {
++    state.current.push(
++      new ExternalHyperlink({
++        link: href,
++        children: [
++          new TextRun({
++            text: label,
++            style: 'Hyperlink',
++            color: '0563C1',
++            underline: { type: UnderlineType.SINGLE },
++          }),
++        ],
++      }),
++    );
++  } else {
++    state.text(label);
++  }
++  state.closeBlock(node);
++};
++
+ const renderFileLine: NodeSerializerAsync[string] = (state, node) => {
+   const label =
+-    node.attrs?.name || node.attrs?.src || node.attrs?.url || 'attachment';
+-  state.text(label);
+-  state.closeBlock(node);
++    node.attrs?.hrefLabel ||
++    node.attrs?.name ||
++    node.attrs?.src ||
++    node.attrs?.url ||
++    'attachment';
++  appendFileLine(state, node, label);
+ };
+ 
+ const renderEmbedLine: NodeSerializerAsync[string] = (state, node) => {
+-  const label = node.attrs?.src || node.attrs?.url || 'embed';
+-  state.text(label);
+-  state.closeBlock(node);
++  const label =
++    node.attrs?.hrefLabel || node.attrs?.src || node.attrs?.url || 'embed';
++  appendFileLine(state, node, label);
+ };
+ 
+ export const defaultAsyncNodes: NodeSerializerAsync = {
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 1bb461d..e9e0144 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -70,6 +70,9 @@ importers:
+       '@joplin/turndown-plugin-gfm':
+         specifier: 1.0.64
+         version: 1.0.64
++      '@resvg/resvg-js':
++        specifier: 2.6.2
++        version: 2.6.2
+       '@sindresorhus/slugify':
+         specifier: 3.0.0
+         version: 3.0.0
+@@ -3783,6 +3786,86 @@ packages:
+       '@node-rs/xxhash':
+         optional: true
+ 
++  '@resvg/resvg-js-android-arm-eabi@2.6.2':
++    resolution: {integrity: sha512-FrJibrAk6v29eabIPgcTUMPXiEz8ssrAk7TXxsiZzww9UTQ1Z5KAbFJs+Z0Ez+VZTYgnE5IQJqBcoSiMebtPHA==}
++    engines: {node: '>= 10'}
++    cpu: [arm]
++    os: [android]
++
++  '@resvg/resvg-js-android-arm64@2.6.2':
++    resolution: {integrity: sha512-VcOKezEhm2VqzXpcIJoITuvUS/fcjIw5NA/w3tjzWyzmvoCdd+QXIqy3FBGulWdClvp4g+IfUemigrkLThSjAQ==}
++    engines: {node: '>= 10'}
++    cpu: [arm64]
++    os: [android]
++
++  '@resvg/resvg-js-darwin-arm64@2.6.2':
++    resolution: {integrity: sha512-nmok2LnAd6nLUKI16aEB9ydMC6Lidiiq2m1nEBDR1LaaP7FGs4AJ90qDraxX+CWlVuRlvNjyYJTNv8qFjtL9+A==}
++    engines: {node: '>= 10'}
++    cpu: [arm64]
++    os: [darwin]
++
++  '@resvg/resvg-js-darwin-x64@2.6.2':
++    resolution: {integrity: sha512-GInyZLjgWDfsVT6+SHxQVRwNzV0AuA1uqGsOAW+0th56J7Nh6bHHKXHBWzUrihxMetcFDmQMAX1tZ1fZDYSRsw==}
++    engines: {node: '>= 10'}
++    cpu: [x64]
++    os: [darwin]
++
++  '@resvg/resvg-js-linux-arm-gnueabihf@2.6.2':
++    resolution: {integrity: sha512-YIV3u/R9zJbpqTTNwTZM5/ocWetDKGsro0SWp70eGEM9eV2MerWyBRZnQIgzU3YBnSBQ1RcxRZvY/UxwESfZIw==}
++    engines: {node: '>= 10'}
++    cpu: [arm]
++    os: [linux]
++
++  '@resvg/resvg-js-linux-arm64-gnu@2.6.2':
++    resolution: {integrity: sha512-zc2BlJSim7YR4FZDQ8OUoJg5holYzdiYMeobb9pJuGDidGL9KZUv7SbiD4E8oZogtYY42UZEap7dqkkYuA91pg==}
++    engines: {node: '>= 10'}
++    cpu: [arm64]
++    os: [linux]
++    libc: [glibc]
++
++  '@resvg/resvg-js-linux-arm64-musl@2.6.2':
++    resolution: {integrity: sha512-3h3dLPWNgSsD4lQBJPb4f+kvdOSJHa5PjTYVsWHxLUzH4IFTJUAnmuWpw4KqyQ3NA5QCyhw4TWgxk3jRkQxEKg==}
++    engines: {node: '>= 10'}
++    cpu: [arm64]
++    os: [linux]
++    libc: [musl]
++
++  '@resvg/resvg-js-linux-x64-gnu@2.6.2':
++    resolution: {integrity: sha512-IVUe+ckIerA7xMZ50duAZzwf1U7khQe2E0QpUxu5MBJNao5RqC0zwV/Zm965vw6D3gGFUl7j4m+oJjubBVoftw==}
++    engines: {node: '>= 10'}
++    cpu: [x64]
++    os: [linux]
++    libc: [glibc]
++
++  '@resvg/resvg-js-linux-x64-musl@2.6.2':
++    resolution: {integrity: sha512-UOf83vqTzoYQO9SZ0fPl2ZIFtNIz/Rr/y+7X8XRX1ZnBYsQ/tTb+cj9TE+KHOdmlTFBxhYzVkP2lRByCzqi4jQ==}
++    engines: {node: '>= 10'}
++    cpu: [x64]
++    os: [linux]
++    libc: [musl]
++
++  '@resvg/resvg-js-win32-arm64-msvc@2.6.2':
++    resolution: {integrity: sha512-7C/RSgCa+7vqZ7qAbItfiaAWhyRSoD4l4BQAbVDqRRsRgY+S+hgS3in0Rxr7IorKUpGE69X48q6/nOAuTJQxeQ==}
++    engines: {node: '>= 10'}
++    cpu: [arm64]
++    os: [win32]
++
++  '@resvg/resvg-js-win32-ia32-msvc@2.6.2':
++    resolution: {integrity: sha512-har4aPAlvjnLcil40AC77YDIk6loMawuJwFINEM7n0pZviwMkMvjb2W5ZirsNOZY4aDbo5tLx0wNMREp5Brk+w==}
++    engines: {node: '>= 10'}
++    cpu: [ia32]
++    os: [win32]
++
++  '@resvg/resvg-js-win32-x64-msvc@2.6.2':
++    resolution: {integrity: sha512-ZXtYhtUr5SSaBrUDq7DiyjOFJqBVL/dOBN7N/qmi/pO0IgiWW/f/ue3nbvu9joWE5aAKDoIzy/CxsY0suwGosQ==}
++    engines: {node: '>= 10'}
++    cpu: [x64]
++    os: [win32]
++
++  '@resvg/resvg-js@2.6.2':
++    resolution: {integrity: sha512-xBaJish5OeGmniDj9cW5PRa/PtmuVU3ziqrbr5xJj901ZDN4TosrVaNZpEiLZAxdfnhAe7uQ7QFWfjPe9d9K2Q==}
++    engines: {node: '>= 10'}
++
+   '@rolldown/binding-android-arm64@1.0.3':
+     resolution: {integrity: sha512-454rs7jHngixp/NMxd5srYD57OnzSlZ/eFTETjORQHLwJG1lRtmNOJcBerZlfu4GjKqeq8aCCIQrMdHyhI51Hw==}
+     engines: {node: ^20.19.0 || >=22.12.0}
+@@ -13786,6 +13869,57 @@ snapshots:
+     dependencies:
+       cluster-key-slot: 1.1.2
+ 
++  '@resvg/resvg-js-android-arm-eabi@2.6.2':
++    optional: true
++
++  '@resvg/resvg-js-android-arm64@2.6.2':
++    optional: true
++
++  '@resvg/resvg-js-darwin-arm64@2.6.2':
++    optional: true
++
++  '@resvg/resvg-js-darwin-x64@2.6.2':
++    optional: true
++
++  '@resvg/resvg-js-linux-arm-gnueabihf@2.6.2':
++    optional: true
++
++  '@resvg/resvg-js-linux-arm64-gnu@2.6.2':
++    optional: true
++
++  '@resvg/resvg-js-linux-arm64-musl@2.6.2':
++    optional: true
++
++  '@resvg/resvg-js-linux-x64-gnu@2.6.2':
++    optional: true
++
++  '@resvg/resvg-js-linux-x64-musl@2.6.2':
++    optional: true
++
++  '@resvg/resvg-js-win32-arm64-msvc@2.6.2':
++    optional: true
++
++  '@resvg/resvg-js-win32-ia32-msvc@2.6.2':
++    optional: true
++
++  '@resvg/resvg-js-win32-x64-msvc@2.6.2':
++    optional: true
++
++  '@resvg/resvg-js@2.6.2':
++    optionalDependencies:
++      '@resvg/resvg-js-android-arm-eabi': 2.6.2
++      '@resvg/resvg-js-android-arm64': 2.6.2
++      '@resvg/resvg-js-darwin-arm64': 2.6.2
++      '@resvg/resvg-js-darwin-x64': 2.6.2
++      '@resvg/resvg-js-linux-arm-gnueabihf': 2.6.2
++      '@resvg/resvg-js-linux-arm64-gnu': 2.6.2
++      '@resvg/resvg-js-linux-arm64-musl': 2.6.2
++      '@resvg/resvg-js-linux-x64-gnu': 2.6.2
++      '@resvg/resvg-js-linux-x64-musl': 2.6.2
++      '@resvg/resvg-js-win32-arm64-msvc': 2.6.2
++      '@resvg/resvg-js-win32-ia32-msvc': 2.6.2
++      '@resvg/resvg-js-win32-x64-msvc': 2.6.2
++
+   '@rolldown/binding-android-arm64@1.0.3':
+     optional: true
+ 

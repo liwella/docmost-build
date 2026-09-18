@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Docmost version tag, e.g. v0.95.0'
+        description: 'Docmost version tag, e.g. v0.96.0'
         required: true
-        default: 'v0.95.0'
+        default: 'v0.96.0'
       tag_suffix:
         description: 'Image tag suffix'
         required: false
@@ -20,6 +20,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # 1) Docmost 源码（必须先检出到工作区根目录）
+      #    不要加 submodules: recursive，apps/server/src/ee 是私有子模块会 403
       - name: Checkout Docmost source
         uses: actions/checkout@v4
         with:
@@ -27,11 +29,27 @@ jobs:
           ref: ${{ inputs.version }}
           persist-credentials: false
 
-      - name: Apply zip attachment path fix
+      # 2) 本仓库（提供 patches/ 目录）。必须在第 1 步之后检出，
+      #    因为 checkout 到根目录时会清理工作区，会删掉 build-repo。
+      - name: Checkout build repo (patches)
+        uses: actions/checkout@v4
+        with:
+          path: build-repo
+          persist-credentials: false
+
+      # 3) 应用补丁（已包含 ZIP 附件路径修复 + DOCX 导出 + SVG 光栅化 + 附件超链接）
+      - name: Apply patch
         run: |
-          sed -i 's|`/files/${attachment.id}/${attachment.fileName}`|`files/${attachment.id}/${attachment.fileName}`|' \
-            apps/server/src/integrations/export/export.service.ts
-          grep -n 'const filePath' apps/server/src/integrations/export/export.service.ts
+          set -euo pipefail
+          patch_file="$GITHUB_WORKSPACE/build-repo/patches/docmost-docx-export.patch"
+          test -f "$patch_file" || { echo "::error::missing $patch_file"; exit 1; }
+          # 去掉上传/编辑器可能引入的 CR，避免 git apply 报 corrupt patch
+          tr -d '\r' < "$patch_file" > /tmp/docmost-docx-export.patch
+          git apply --verbose --whitespace=nowarn /tmp/docmost-docx-export.patch
+          echo "--- patched tree ---"
+          git status --short
+          # 补丁仓库不参与镜像构建，移出 Docker 构建上下文
+          rm -rf "$GITHUB_WORKSPACE/build-repo"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
