@@ -12,7 +12,7 @@ index 33cac22..d34c064 100644
  
  # drop npm and corepack
 diff --git a/apps/client/src/components/common/export-modal.tsx b/apps/client/src/components/common/export-modal.tsx
-index bbd58b6..269c2d5 100644
+index bbd58b6..b9f14a2 100644
 --- a/apps/client/src/components/common/export-modal.tsx
 +++ b/apps/client/src/components/common/export-modal.tsx
 @@ -6,8 +6,6 @@ import {
@@ -54,7 +54,7 @@ index bbd58b6..269c2d5 100644
              />
            </Group>
  
-@@ -164,16 +154,12 @@ export default function ExportModal({
+@@ -164,16 +154,9 @@ export default function ExportModal({
              <Button onClick={onClose} variant="default">
                {t("Cancel")}
              </Button>
@@ -68,16 +68,13 @@ index bbd58b6..269c2d5 100644
 -                {t("Export")}
 -              </Button>
 -            </Tooltip>
-+            <Button
-+              onClick={handleExport}
-+              loading={isExporting}
-+            >
++            <Button onClick={handleExport} loading={isExporting}>
 +              {t("Export")}
 +            </Button>
            </Group>
          </Modal.Body>
        </Modal.Content>
-@@ -185,13 +171,11 @@ interface ExportFormatSelection {
+@@ -185,22 +168,18 @@ interface ExportFormatSelection {
    format: ExportFormat;
    onChange: (value: string) => void;
    includeDocx?: boolean;
@@ -91,16 +88,17 @@ index bbd58b6..269c2d5 100644
  }: ExportFormatSelection) {
    const { t } = useTranslation();
  
-@@ -199,7 +183,7 @@ function ExportFormatSelection({
+   const data = [
      { value: "markdown", label: "Markdown" },
      { value: "html", label: "HTML" },
-     ...(includeDocx
+-    ...(includeDocx
 -      ? [{ value: "docx", label: "Word (.docx)", disabled: !docxEntitled }]
-+      ? [{ value: "docx", label: "Word (.docx)" }]
-       : []),
+-      : []),
++    ...(includeDocx ? [{ value: "docx", label: "Word (.docx/.zip)" }] : []),
    ];
  
-@@ -213,20 +197,6 @@ function ExportFormatSelection({
+   return (
+@@ -213,20 +192,6 @@ function ExportFormatSelection({
        allowDeselect={false}
        withCheckIcon={false}
        aria-label={t("Select export format")}
@@ -123,10 +121,10 @@ index bbd58b6..269c2d5 100644
  }
 diff --git a/apps/server/src/integrations/export/docx-export.service.ts b/apps/server/src/integrations/export/docx-export.service.ts
 new file mode 100644
-index 0000000..f18fdc8
+index 0000000..246b789
 --- /dev/null
 +++ b/apps/server/src/integrations/export/docx-export.service.ts
-@@ -0,0 +1,212 @@
+@@ -0,0 +1,253 @@
 +import { Injectable, Logger } from '@nestjs/common';
 +import { InjectKysely } from 'nestjs-kysely';
 +import { KyselyDB } from '@docmost/db/types/kysely.types';
@@ -137,7 +135,9 @@ index 0000000..f18fdc8
 +import { StorageService } from '../storage/storage.service';
 +import { EnvironmentService } from '../environment/environment.service';
 +import { Node } from '@tiptap/pm/model';
++import * as JSZip from 'jszip';
 +import { Resvg } from '@resvg/resvg-js';
++import { getSafePageTitle } from './utils';
 +
 +// Matches "/api/files/{id}/{name}" and "/files/{id}/{name}", with or without
 +// a host prefix.
@@ -164,6 +164,11 @@ index 0000000..f18fdc8
 +const SVG_RASTER_WIDTH = 1400;
 +const SVG_FILE_REGEX = /\.svg$/i;
 +
++type AttachmentFile = {
++  path: string;
++  buffer: Buffer;
++};
++
 +@Injectable()
 +export class DocxExportService {
 +  private readonly logger = new Logger(DocxExportService.name);
@@ -176,7 +181,7 @@ index 0000000..f18fdc8
 +
 +  async exportPage(page: Page): Promise<Buffer> {
 +    const doc = jsonToNode(getProsemirrorContent(page.content));
-+    await this.prepareAttachmentNodes(doc);
++    const attachmentFiles = await this.prepareAttachmentNodes(doc);
 +
 +    const getImageBuffer = async (src: string): Promise<Uint8Array> => {
 +      const attachmentId = this.extractAttachmentId(src);
@@ -205,7 +210,15 @@ index 0000000..f18fdc8
 +      return new Uint8Array(buffer);
 +    };
 +
-+    return pageNodeToDocxBuffer(doc, getImageBuffer);
++    const docxBuffer = await pageNodeToDocxBuffer(doc, getImageBuffer);
++
++    // Attachments travel next to the .docx so the hyperlinks inside the
++    // document keep working offline, without calling back into Docmost.
++    const zip = new JSZip();
++    zip.file(`${getSafePageTitle(page.title)}.docx`, docxBuffer);
++    attachmentFiles.forEach((file) => zip.file(file.path, file.buffer));
++
++    return zip.generateAsync({ type: 'nodebuffer' });
 +  }
 +
 +  private extractAttachmentId(src: string): string | null {
@@ -219,8 +232,9 @@ index 0000000..f18fdc8
 +  // attachments), so attachment-backed nodes are rewritten before export:
 +  //   - image/drawio/excalidraw keep a src the serializer reads as an image
 +  //     (rasterized SVG diagrams are advertised as .png)
-+  //   - every other file node gets an absolute href rendered as a hyperlink
-+  private async prepareAttachmentNodes(doc: Node) {
++  //   - every other file node links to the copy packed next to the .docx,
++  //     falling back to an absolute URL when the file cannot be read
++  private async prepareAttachmentNodes(doc: Node): Promise<AttachmentFile[]> {
 +    const images: { node: Node; attachmentId: string }[] = [];
 +    const links: {
 +      node: Node;
@@ -246,7 +260,7 @@ index 0000000..f18fdc8
 +      }
 +    });
 +
-+    if (images.length === 0 && links.length === 0) return;
++    if (images.length === 0 && links.length === 0) return [];
 +
 +    const ids = new Set<string>();
 +    images.forEach((item) => ids.add(item.attachmentId));
@@ -258,16 +272,16 @@ index 0000000..f18fdc8
 +    const attachments = attachmentIds.length
 +      ? await this.db
 +          .selectFrom('attachments')
-+          .select(['id', 'fileName'])
++          .select(['id', 'fileName', 'filePath'])
 +          .where('id', 'in', attachmentIds)
 +          .execute()
 +      : [];
-+    const fileNameById = new Map(
-+      attachments.map((attachment) => [attachment.id, attachment.fileName]),
++    const attachmentById = new Map(
++      attachments.map((attachment) => [attachment.id, attachment]),
 +    );
 +
 +    for (const { node, attachmentId } of images) {
-+      const fileName = fileNameById.get(attachmentId);
++      const fileName = attachmentById.get(attachmentId)?.fileName;
 +      if (!fileName) continue;
 +      // The serializer picks the image type from the src file extension.
 +      const exportName = SVG_FILE_REGEX.test(fileName)
@@ -278,18 +292,43 @@ index 0000000..f18fdc8
 +      });
 +    }
 +
++    const files = new Map<string, AttachmentFile>();
++
 +    for (const { node, attachmentId, href } of links) {
-+      const fileName = attachmentId
-+        ? fileNameById.get(attachmentId)
++      const attachment = attachmentId
++        ? attachmentById.get(attachmentId)
 +        : undefined;
-+      const url = fileName
-+        ? `${this.environmentService.getAppUrl()}/api/files/${attachmentId}/${encodeURIComponent(fileName)}`
-+        : href;
-+      if (url) {
-+        // hrefLabel keeps the stored file name as the visible link text.
-+        Object.assign(node.attrs, { href: url, hrefLabel: fileName });
++
++      if (attachment) {
++        try {
++          const buffer = await this.storageService.read(attachment.filePath);
++          files.set(attachment.id, {
++            path: `files/${attachment.id}/${attachment.fileName}`,
++            buffer,
++          });
++          // hrefLabel keeps the stored file name as the visible link text.
++          // The relative target resolves against the .docx, which sits next
++          // to the files/ folder in the exported zip.
++          Object.assign(node.attrs, {
++            href: `files/${attachment.id}/${encodeURIComponent(attachment.fileName)}`,
++            hrefLabel: attachment.fileName,
++          });
++          continue;
++        } catch (err) {
++          this.logger.warn(
++            `DOCX export: failed to read attachment ${attachment.id}`,
++            err,
++          );
++        }
++      }
++
++      // Nothing packed for this node: keep the original URL as the target.
++      if (href) {
++        Object.assign(node.attrs, { href, hrefLabel: attachment?.fileName });
 +      }
 +    }
++
++    return [...files.values()];
 +  }
 +
 +  private resolveAttachmentId(node: Node): string | null {
@@ -356,7 +395,7 @@ index a2216b2..2e2f405 100644
  }
 \ No newline at end of file
 diff --git a/apps/server/src/integrations/export/export.controller.ts b/apps/server/src/integrations/export/export.controller.ts
-index 140622d..b18a43a 100644
+index 140622d..0af4a35 100644
 --- a/apps/server/src/integrations/export/export.controller.ts
 +++ b/apps/server/src/integrations/export/export.controller.ts
 @@ -11,7 +11,12 @@ import {
@@ -381,7 +420,7 @@ index 140622d..b18a43a 100644
      private readonly pageRepo: PageRepo,
      private readonly spaceAbility: SpaceAbilityFactory,
      private readonly pageAccessService: PageAccessService,
-@@ -115,6 +121,51 @@ export class ExportController {
+@@ -115,6 +121,50 @@ export class ExportController {
      }
    }
  
@@ -406,7 +445,7 @@ index 140622d..b18a43a 100644
 +    const fileBuffer = await this.docxExportService.exportPage(page);
 +    const fileName =
 +      sanitizeFileName(getPageTitle(page.title), { preserveSpaces: true }) +
-+      '.docx';
++      '.zip';
 +
 +    this.auditService.log({
 +      event: AuditEvent.PAGE_EXPORTED,
@@ -421,8 +460,7 @@ index 140622d..b18a43a 100644
 +    });
 +
 +    res.headers({
-+      'Content-Type':
-+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
++      'Content-Type': 'application/zip',
 +      'Content-Disposition':
 +        'attachment; filename="' + encodeURIComponent(fileName) + '"',
 +    });
