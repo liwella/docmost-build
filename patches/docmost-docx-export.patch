@@ -839,7 +839,7 @@ index 7ef894c..cb21a44 100644
      "@tiptap/core": "3.31.3",
      "@tiptap/extension-audio": "3.31.3",
 diff --git a/packages/editor-ext/src/lib/prosemirror-docx/schema.ts b/packages/editor-ext/src/lib/prosemirror-docx/schema.ts
-index 235d796..fa78c7c 100644
+index 235d796..e335a6a 100644
 --- a/packages/editor-ext/src/lib/prosemirror-docx/schema.ts
 +++ b/packages/editor-ext/src/lib/prosemirror-docx/schema.ts
 @@ -1,7 +1,22 @@
@@ -1104,6 +1104,22 @@ index 235d796..fa78c7c 100644
    },
    // Docmost stores LaTeX in attrs.text.
    mathInline(state, node) {
+@@ -258,7 +460,14 @@ export async function pageNodeToDocxBuffer(
+       ({
+         styles: {
+           default: {
+-            document: { paragraph: { spacing: { after: 160 } } },
++            // Word's CJK default alignment is justified, which spreads out
++            // body text; the editor renders plain left aligned text.
++            document: {
++              paragraph: {
++                spacing: { after: 160 },
++                alignment: AlignmentType.LEFT,
++              },
++            },
+             heading1: {
+               run: { color: '000000', size: 32 },
+               paragraph: {
 diff --git a/packages/editor-ext/src/lib/prosemirror-docx/serializer.ts b/packages/editor-ext/src/lib/prosemirror-docx/serializer.ts
 index b349ece..0f3ca7c 100644
 --- a/packages/editor-ext/src/lib/prosemirror-docx/serializer.ts

@@ -32,7 +32,8 @@ Actions -> Build Docmost Fixed (Docker Hub) -> Run workflow：
 - 页面标题导出成 docx 正文里的第一个一级标题（标题在 Docmost 里是独立字段、不写在正文内容里，之前整段丢失）
 - HTML 导出补上基础排版：正文居中、宽度取窗口一半且不超过 1100px（`body { max-width: min(50%, 1100px); margin: 0 auto }`）、图片/视频水平居中且不超出内容区；表格占满内容区宽度（编辑器写在 `<table>` 上的内联列宽总和会被 `width: 100% !important` 覆盖）并保留 1:3 这类列宽比例，加上 `1px solid #ced4da` 边框、表头 `#f1f3f5` 底色加粗、单元格内边距，单元格加 `overflow-wrap: anywhere`，让长 URL / 长 token 在格子内断行而不是横穿整页；并在 head 里声明 `<meta charset="utf-8" />`，避免本地打开时中文乱码。导出页面原本不带任何样式表，所以表格无边框、内容又是铺满整个窗口的
 - docx 正文里的图片直接嵌入（SVG 先用 resvg 光栅化成 PNG）；附件/PDF/视频/音频写成超链接，目标是包内相对路径 `files/...`，解压后点击即打开本地文件，全程不访问 Docmost
-- 代码块导出为等宽字体（Consolas 9pt）+ 灰底 + 细边框，逐行输出并保留缩进（Word 会忽略文本里的原始换行，所以按行拆成多个 run）；并强制左对齐 —— 中文版 Word 的正文默认是两端对齐，而代码块是「一个段落 + 软换行」，不给 `w:jc` 就会把每一行都拉开
+- 全文段落默认左对齐：中文版 Word 在文档没写对齐方式时按语言默认走「两端对齐」，会把中文和代码行的字距拉开，所以在 `w:docDefaults/w:pPrDefault` 里写死 `w:jc w:val="left"`（一处生效到正文、标题、列表、表格单元格）；图片仍由自己的 `w:jc w:val="center"` 居中
+- 代码块导出为等宽字体（Consolas 9pt）+ 灰底 + 细边框，逐行输出并保留缩进（Word 会忽略文本里的原始换行，所以按行拆成多个 run）；代码块自己再显式写一次左对齐，避免默认值被改动后又被拉开
 - mermaid 代码块导出成图片：前端用 mermaid 渲染 SVG（`htmlLabels: false`，容器的 resvg 画不了 `<foreignObject>`），服务端 resvg 光栅化成 PNG 嵌进 docx；渲染失败的图仍按代码文本导出
 - 表格还原编辑器样式：1px `#ced4da` 边框、表头 `#F1F3F5` 灰底加粗且跨页重复、单元格 3px/5px 内边距、列宽按编辑器拖拽的 `colwidth` 等比缩放（没拖过就等分），整表固定布局占满正文宽度
 - 过高的图自动限高，避免超出页面可用高度被 Word 截断
