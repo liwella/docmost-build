@@ -839,10 +839,10 @@ index 7ef894c..cb21a44 100644
      "@tiptap/core": "3.31.3",
      "@tiptap/extension-audio": "3.31.3",
 diff --git a/packages/editor-ext/src/lib/prosemirror-docx/schema.ts b/packages/editor-ext/src/lib/prosemirror-docx/schema.ts
-index 235d796..e335a6a 100644
+index 235d796..45a61c4 100644
 --- a/packages/editor-ext/src/lib/prosemirror-docx/schema.ts
 +++ b/packages/editor-ext/src/lib/prosemirror-docx/schema.ts
-@@ -1,7 +1,22 @@
+@@ -1,7 +1,24 @@
 -import { FootnoteReferenceRun, HeadingLevel, Paragraph, ShadingType } from 'docx';
 +import {
 +  AlignmentType,
@@ -850,7 +850,9 @@ index 235d796..e335a6a 100644
 +  ExternalHyperlink,
 +  FootnoteReferenceRun,
 +  HeadingLevel,
++  IParagraphOptions,
 +  IRunOptions,
++  LineRuleType,
 +  Paragraph,
 +  ShadingType,
 +  TableLayoutType,
@@ -866,7 +868,7 @@ index 235d796..e335a6a 100644
    MarkSerializer,
    NodeSerializerAsync,
    OptionsAsync,
-@@ -10,6 +25,106 @@ import { writeDocx } from './utils';
+@@ -10,6 +27,191 @@ import { writeDocx } from './utils';
  
  export type DocxImageResolver = OptionsAsync['getImageBuffer'];
  
@@ -882,6 +884,71 @@ index 235d796..e335a6a 100644
 +  size: 4,
 +  color: 'D9D9D9',
 +  space: 4,
++};
++
++// The editor renders body text at 1rem with a 1.65 line height (Mantine's
++// font-size-md / line-height-xl); Word's own defaults are 11pt single spaced.
++// Fonts are a taste call: change the two names below to whatever the readers of
++// the exported documents have installed.
++const BODY_FONT = {
++  ascii: 'Segoe UI',
++  hAnsi: 'Segoe UI',
++  eastAsia: 'Microsoft YaHei',
++};
++const BODY_FONT_SIZE = 24; // half-points (12pt = 16px)
++const BODY_LINE_SPACING = 396; // 240ths of a line (1.65)
++
++// blockquote: a 3px gray rule left of normal (not italic) text, inset by 1rem.
++// Border sizes are 1/8 pt and spaces are in points.
++const QUOTE_PARAGRAPH: IParagraphOptions = {
++  indent: { left: 240 },
++  border: {
++    left: { style: BorderStyle.SINGLE, size: 18, color: 'CED4DA', space: 12 },
++  },
++};
++
++// Checkbox glyphs are missing from some text fonts; name the symbol font Word
++// and WPS fall back to instead.
++const TASK_CHECKBOX_RUN = {
++  font: { ascii: 'Segoe UI Symbol', hAnsi: 'Segoe UI Symbol' },
++};
++
++// The editor draws user mentions and statuses as colored pills. Page mentions
++// are plain links there, so they get link styling rather than an @ prefix.
++const USER_MENTION_RUN = {
++  shading: { type: ShadingType.CLEAR, fill: 'F1F3F5' },
++  color: '343A40',
++};
++const PAGE_MENTION_RUN = {
++  color: '495057',
++  underline: { type: UnderlineType.SINGLE },
++};
++const STATUS_RUN = { size: 16, bold: true };
++const STATUS_COLORS: Record<string, IRunOptions> = {
++  gray: {
++    shading: { type: ShadingType.CLEAR, fill: 'DFDFD7' },
++    color: '3D3D3D',
++  },
++  blue: {
++    shading: { type: ShadingType.CLEAR, fill: 'BFE3FD' },
++    color: '1A4D99',
++  },
++  green: {
++    shading: { type: ShadingType.CLEAR, fill: 'BBF0AD' },
++    color: '135C13',
++  },
++  yellow: {
++    shading: { type: ShadingType.CLEAR, fill: 'F9EE94' },
++    color: '6B5300',
++  },
++  red: {
++    shading: { type: ShadingType.CLEAR, fill: 'FFC8C3' },
++    color: 'A10000',
++  },
++  purple: {
++    shading: { type: ShadingType.CLEAR, fill: 'E1CFF5' },
++    color: '5B21A6',
++  },
 +};
 +
 +// Tables mirror the editor: a 1px #ced4da grid, a tinted and bold header row,
@@ -920,6 +987,26 @@ index 235d796..e335a6a 100644
 +
 +// tiptap stores column widths in pixels; docx measures in twips (1px = 15).
 +const PIXEL_TO_TWIP = 15;
++
++// tiptap keeps the alignment and the indentation of a block on the node
++// itself; Word wants both in the paragraph properties. The editor indents one
++// 2rem step per level (indent.css).
++const TEXT_ALIGNMENTS: Record<string, IParagraphOptions['alignment']> = {
++  left: AlignmentType.LEFT,
++  center: AlignmentType.CENTER,
++  right: AlignmentType.RIGHT,
++  justify: AlignmentType.JUSTIFIED,
++};
++const INDENT_STEP = 480;
++
++function blockParagraphOptions(node: Node): IParagraphOptions {
++  const alignment = TEXT_ALIGNMENTS[node.attrs?.textAlign as string];
++  const level = Number(node.attrs?.indent) || 0;
++  return {
++    ...(alignment ? { alignment } : {}),
++    ...(level > 0 ? { indent: { left: level * INDENT_STEP } } : {}),
++  };
++}
 +
 +function tableColumnCount(node: Node): number {
 +  let count = 1;
@@ -973,7 +1060,7 @@ index 235d796..e335a6a 100644
  // docx requires a 6-digit hex color (no leading #). Convert #rgb, #rrggbb,
  // and rgb()/rgba() inputs to 6-digit hex; return undefined for anything else
  // (named colors, hsl, etc.) so the caller omits the color rather than letting
-@@ -50,18 +165,49 @@ const renderImage: NodeSerializerAsync[string] = async (state, node) => {
+@@ -50,18 +252,49 @@ const renderImage: NodeSerializerAsync[string] = async (state, node) => {
    state.closeBlock(node);
  };
  
@@ -1030,8 +1117,25 @@ index 235d796..e335a6a 100644
  };
  
  export const defaultAsyncNodes: NodeSerializerAsync = {
-@@ -88,7 +234,49 @@ export const defaultAsyncNodes: NodeSerializerAsync = {
-     await state.renderContent(node, { style: 'IntenseQuote' });
+@@ -69,10 +302,12 @@ export const defaultAsyncNodes: NodeSerializerAsync = {
+     state.text(node.text ?? '');
+   },
+   async paragraph(state, node) {
++    state.addParagraphOptions(blockParagraphOptions(node));
+     await state.renderInline(node);
+     state.closeBlock(node);
+   },
+   async heading(state, node) {
++    state.addParagraphOptions(blockParagraphOptions(node));
+     await state.renderInline(node);
+     const heading = [
+       HeadingLevel.HEADING_1,
+@@ -85,10 +320,52 @@ export const defaultAsyncNodes: NodeSerializerAsync = {
+     state.closeBlock(node, { heading });
+   },
+   async blockquote(state, node) {
+-    await state.renderContent(node, { style: 'IntenseQuote' });
++    await state.renderContent(node, QUOTE_PARAGRAPH);
    },
    async codeBlock(state, node) {
 -    await state.renderContent(node);
@@ -1081,7 +1185,22 @@ index 235d796..e335a6a 100644
      state.closeBlock(node);
    },
    horizontalRule(state, node) {
-@@ -118,7 +306,21 @@ export const defaultAsyncNodes: NodeSerializerAsync = {
+@@ -108,17 +385,31 @@ export const defaultAsyncNodes: NodeSerializerAsync = {
+     await state.renderListItem(node);
+   },
+   async taskList(state, node) {
+-    await state.renderList(node, 'bullets');
++    // The checkbox stands in for the bullet, as in the editor.
++    await state.renderContent(node);
+   },
+   async taskItem(state, node) {
+-    if (state.currentNumbering) {
+-      state.addParagraphOptions({ numbering: state.currentNumbering });
+-    }
+-    state.text(node.attrs?.checked ? '☑ ' : '☐ ');
++    // A hanging indent keeps wrapped lines under the text, not the box.
++    state.addParagraphOptions({ indent: { left: 320, hanging: 320 } });
++    state.text(node.attrs?.checked ? '☑ ' : '☐ ', TASK_CHECKBOX_RUN);
      await state.renderContent(node);
    },
    async table(state, node) {
@@ -1104,22 +1223,108 @@ index 235d796..e335a6a 100644
    },
    // Docmost stores LaTeX in attrs.text.
    mathInline(state, node) {
-@@ -258,7 +460,14 @@ export async function pageNodeToDocxBuffer(
+@@ -160,10 +451,16 @@ export const defaultAsyncNodes: NodeSerializerAsync = {
+     await state.renderContent(node);
+   },
+   mention(state, node) {
+-    state.text(`@${node.attrs?.label ?? ''}`);
++    const label = node.attrs?.label ?? '';
++    if (node.attrs?.entityType === 'page') {
++      state.text(label, PAGE_MENTION_RUN);
++      return;
++    }
++    state.text(`@${label}`, USER_MENTION_RUN);
+   },
+   status(state, node) {
+-    state.text(`[${node.attrs?.text ?? ''}]`);
++    const color = STATUS_COLORS[node.attrs?.color as string] ?? {};
++    state.text(node.attrs?.text ?? '', { ...STATUS_RUN, ...color });
+   },
+   pageBreak(state, node) {
+     state.closeBlock(node, { pageBreakBefore: true });
+@@ -250,17 +547,31 @@ export async function pageNodeToDocxBuffer(
+   const wordDoc = await serializer.serializeAsync(
+     doc,
+     { getImageBuffer },
+-    // docx's built-in heading styles are blue (#2E74B5 / #1F4D78). The editor
+-    // has no heading color, so override the default heading run colors to the
+-    // normal text color. Sizes/italics mirror docx's own defaults so only the
+-    // color changes.
++    // docx's built-in heading styles are blue (#2E74B5 / #1F4D78) and
++    // italicized; the editor's headings are black and bold, at 1.875/1.5/1.25rem
++    // for h1-h3 and the browser's 1/0.83/0.67em for h4-h6 (core.css).
+     () =>
        ({
          styles: {
            default: {
 -            document: { paragraph: { spacing: { after: 160 } } },
-+            // Word's CJK default alignment is justified, which spreads out
-+            // body text; the editor renders plain left aligned text.
 +            document: {
++              run: {
++                font: BODY_FONT,
++                size: BODY_FONT_SIZE,
++              },
++              // Word's CJK default alignment is justified, which spreads out
++              // body text; the editor renders plain left aligned text.
 +              paragraph: {
-+                spacing: { after: 160 },
++                spacing: {
++                  after: 160,
++                  line: BODY_LINE_SPACING,
++                  lineRule: LineRuleType.AUTO,
++                },
 +                alignment: AlignmentType.LEFT,
 +              },
 +            },
              heading1: {
-               run: { color: '000000', size: 32 },
+-              run: { color: '000000', size: 32 },
++              run: { color: '000000', size: 45, bold: true },
                paragraph: {
+                 keepNext: true,
+                 keepLines: true,
+@@ -268,7 +579,7 @@ export async function pageNodeToDocxBuffer(
+               },
+             },
+             heading2: {
+-              run: { color: '000000', size: 26 },
++              run: { color: '000000', size: 36, bold: true },
+               paragraph: {
+                 keepNext: true,
+                 keepLines: true,
+@@ -276,7 +587,7 @@ export async function pageNodeToDocxBuffer(
+               },
+             },
+             heading3: {
+-              run: { color: '000000', size: 24 },
++              run: { color: '000000', size: 30, bold: true },
+               paragraph: {
+                 keepNext: true,
+                 keepLines: true,
+@@ -284,7 +595,7 @@ export async function pageNodeToDocxBuffer(
+               },
+             },
+             heading4: {
+-              run: { color: '000000', italics: true },
++              run: { color: '000000', size: 24, bold: true },
+               paragraph: {
+                 keepNext: true,
+                 keepLines: true,
+@@ -292,7 +603,7 @@ export async function pageNodeToDocxBuffer(
+               },
+             },
+             heading5: {
+-              run: { color: '000000' },
++              run: { color: '000000', size: 20, bold: true },
+               paragraph: {
+                 keepNext: true,
+                 keepLines: true,
+@@ -300,7 +611,7 @@ export async function pageNodeToDocxBuffer(
+               },
+             },
+             heading6: {
+-              run: { color: '000000' },
++              run: { color: '000000', size: 16, bold: true },
+               paragraph: {
+                 keepNext: true,
+                 keepLines: true,
 diff --git a/packages/editor-ext/src/lib/prosemirror-docx/serializer.ts b/packages/editor-ext/src/lib/prosemirror-docx/serializer.ts
 index b349ece..0f3ca7c 100644
 --- a/packages/editor-ext/src/lib/prosemirror-docx/serializer.ts

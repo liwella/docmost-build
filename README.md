@@ -38,6 +38,13 @@ Actions -> Build Docmost Fixed (Docker Hub) -> Run workflow：
 - 表格还原编辑器样式：1px `#ced4da` 边框、表头 `#F1F3F5` 灰底加粗且跨页重复、单元格 3px/5px 内边距、列宽按编辑器拖拽的 `colwidth` 等比缩放（没拖过就等分），整表固定布局占满正文宽度
 - 过高的图自动限高，避免超出页面可用高度被 Word 截断
 - 修复 ZIP 导出中附件路径多一个前导 `/` 的问题
+- 段落对齐跟随编辑器：`textAlign`（左/居中/右/两端对齐）现在写进 docx 段落属性，之前只有「全文默认左对齐」，居中/右对齐会被吃掉
+- 正文字体/字号/行距跟随编辑器：`w:docDefaults/w:rPrDefault` 设为 `Segoe UI` + `Microsoft YaHei`（中文）、12pt、1.65 倍行距；要换字体只改 `schema.ts` 顶部的 `BODY_FONT`/`BODY_FONT_SIZE`/`BODY_LINE_SPACING`
+- 标题改为编辑器尺寸的黑色加粗（h1 22.5pt、h2 18pt、h3 15pt、h4 12pt、h5 10pt、h6 8pt）；旧版是 docx 自带的蓝色 16/13/12pt
+- 任务列表按编辑器显示：勾选状态用 ☑/☐（Segoe UI Symbol）表示、不再带项目符号，续行用悬挂缩进对齐
+- 引用块改成编辑器样式：左侧 3px `#ced4da` 竖线 + 正常字体（原来用 Word 内置 `IntenseQuote`，是斜体加蓝色下框线）
+- 行内提及/状态按编辑器上色：用户提及是灰底胶囊（`#F1F3F5`）、页面提及按下划线链接样式且不再加 `@` 前缀、状态是对应颜色的加粗小胶囊（8pt）
+- 段落缩进跟随编辑器：编辑器一级缩进 2rem，导出成 Word 的 `w:ind w:left`（一级 480 twips = 32px）
 - Dockerfile 增加中文字体 `fonts-wqy-microhei`，否则 Word 中中文渲染为空白
 
 ## 附件是怎么取的
