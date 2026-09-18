@@ -754,10 +754,10 @@ index e05ad28..fd2d08b 100644
  })
  export class ExportModule {}
 diff --git a/apps/server/src/integrations/export/export.service.ts b/apps/server/src/integrations/export/export.service.ts
-index 733e4e9..2da0ef8 100644
+index 733e4e9..ef09f2a 100644
 --- a/apps/server/src/integrations/export/export.service.ts
 +++ b/apps/server/src/integrations/export/export.service.ts
-@@ -42,6 +42,44 @@ import { htmlToMarkdown } from '@docmost/editor-ext';
+@@ -42,6 +42,47 @@ import { htmlToMarkdown } from '@docmost/editor-ext';
  
  type AllowedAttachment = { id: string; fileName: string; filePath: string };
  
@@ -766,7 +766,7 @@ index 733e4e9..2da0ef8 100644
 +const EXPORT_HTML_STYLES = `
 +      body {
 +        margin: 0 auto;
-+        max-width: 50%;
++        max-width: min(50%, 1100px);
 +        padding: 32px 0;
 +      }
 +      img,
@@ -780,6 +780,9 @@ index 733e4e9..2da0ef8 100644
 +      table {
 +        border-collapse: collapse;
 +        table-layout: fixed;
++        /* The editor writes the dragged column widths onto the table as an
++           inline width; the export fills the content area instead. */
++        width: 100% !important;
 +      }
 +      td,
 +      th {
@@ -802,7 +805,7 @@ index 733e4e9..2da0ef8 100644
  @Injectable()
  export class ExportService {
    private readonly logger = new Logger(ExportService.name);
-@@ -86,7 +124,10 @@ export class ExportService {
+@@ -86,7 +127,10 @@ export class ExportService {
        return `<!DOCTYPE html>
        <html>
          <head>
@@ -813,7 +816,7 @@ index 733e4e9..2da0ef8 100644
          </head>
          <body>${pageHtml}</body>
        </html>`;
-@@ -371,7 +412,7 @@ export class ExportService {
+@@ -371,7 +415,7 @@ export class ExportService {
            const fileBuffer = await this.storageService.read(
              attachment.filePath,
            );
