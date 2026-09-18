@@ -30,6 +30,7 @@ Actions -> Build Docmost Fixed (Docker Hub) -> Run workflow：
 - 新增 DOCX 导出实现（`apps/server/src/integrations/export/docx-export.service.ts`）与 `POST /api/docx-export` 接口，前端导出弹窗去掉企业版限制
 - Word 导出改为产出 zip：`<页面标题>.zip` 里是 `<页面标题>.docx` 加同级 `files/{附件id}/{ASCII 文件名}`
 - docx 正文里的图片直接嵌入（SVG 先用 resvg 光栅化成 PNG）；附件/PDF/视频/音频写成超链接，目标是包内相对路径 `files/...`，解压后点击即打开本地文件，全程不访问 Docmost
+- 代码块导出为等宽字体（Consolas 9pt）+ 灰底 + 细边框，逐行输出并保留缩进（Word 会忽略文本里的原始换行，所以按行拆成多个 run）
 - 修复 ZIP 导出中附件路径多一个前导 `/` 的问题
 - Dockerfile 增加中文字体 `fonts-wqy-microhei`，否则 Word 中中文渲染为空白
 

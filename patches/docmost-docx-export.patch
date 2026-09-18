@@ -536,12 +536,13 @@ index 7ef894c..cb21a44 100644
      "@tiptap/core": "3.31.3",
      "@tiptap/extension-audio": "3.31.3",
 diff --git a/packages/editor-ext/src/lib/prosemirror-docx/schema.ts b/packages/editor-ext/src/lib/prosemirror-docx/schema.ts
-index 235d796..ef97282 100644
+index 235d796..4c85a07 100644
 --- a/packages/editor-ext/src/lib/prosemirror-docx/schema.ts
 +++ b/packages/editor-ext/src/lib/prosemirror-docx/schema.ts
-@@ -1,7 +1,16 @@
+@@ -1,7 +1,17 @@
 -import { FootnoteReferenceRun, HeadingLevel, Paragraph, ShadingType } from 'docx';
 +import {
++  BorderStyle,
 +  ExternalHyperlink,
 +  FootnoteReferenceRun,
 +  HeadingLevel,
@@ -557,7 +558,28 @@ index 235d796..ef97282 100644
    MarkSerializer,
    NodeSerializerAsync,
    OptionsAsync,
-@@ -50,18 +59,49 @@ const renderImage: NodeSerializerAsync[string] = async (state, node) => {
+@@ -10,6 +20,20 @@ import { writeDocx } from './utils';
+ 
+ export type DocxImageResolver = OptionsAsync['getImageBuffer'];
+ 
++// Code blocks carry no marks, so their formatting is applied to the whole
++// block: monospaced runs on a shaded, bordered paragraph like the editor.
++const CODE_BLOCK_RUN = {
++  font: { ascii: 'Consolas', hAnsi: 'Consolas' },
++  size: 18,
++};
++
++const CODE_BLOCK_BORDER = {
++  style: BorderStyle.SINGLE,
++  size: 4,
++  color: 'D9D9D9',
++  space: 4,
++};
++
+ // docx requires a 6-digit hex color (no leading #). Convert #rgb, #rrggbb,
+ // and rgb()/rgba() inputs to 6-digit hex; return undefined for anything else
+ // (named colors, hsl, etc.) so the caller omits the color rather than letting
+@@ -50,18 +74,49 @@ const renderImage: NodeSerializerAsync[string] = async (state, node) => {
    state.closeBlock(node);
  };
  
@@ -614,6 +636,38 @@ index 235d796..ef97282 100644
  };
  
  export const defaultAsyncNodes: NodeSerializerAsync = {
+@@ -88,7 +143,30 @@ export const defaultAsyncNodes: NodeSerializerAsync = {
+     await state.renderContent(node, { style: 'IntenseQuote' });
+   },
+   async codeBlock(state, node) {
+-    await state.renderContent(node);
++    state.addParagraphOptions({
++      shading: { type: ShadingType.CLEAR, fill: 'F2F2F2' },
++      border: {
++        top: CODE_BLOCK_BORDER,
++        bottom: CODE_BLOCK_BORDER,
++        left: CODE_BLOCK_BORDER,
++        right: CODE_BLOCK_BORDER,
++      },
++      spacing: { before: 120, after: 120 },
++      keepLines: true,
++    });
++
++    // Word ignores raw newlines inside a text run, so the block is emitted as
++    // one run per line; indentation survives through xml:space="preserve".
++    const lines = node.textContent.split('\n');
++    if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
++
++    lines.forEach((line, index) => {
++      if (index > 0) {
++        state.current.push(new TextRun({ break: 1, ...CODE_BLOCK_RUN }));
++      }
++      if (line) state.text(line, CODE_BLOCK_RUN);
++    });
++
+     state.closeBlock(node);
+   },
+   horizontalRule(state, node) {
 diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
 index 1bb461d..e9e0144 100644
 --- a/pnpm-lock.yaml
